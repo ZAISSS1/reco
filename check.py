@@ -5,7 +5,8 @@ from collections import defaultdict
 if sys.stdout is None:  # 用 pythonw（排程）執行時沒有主控台
     sys.stdout = sys.stderr = open(os.devnull, 'w', encoding='utf-8')
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOKEN_FILE = next((p for p in (os.path.join(HERE, 'finmind_token.txt'), os.path.join(os.path.dirname(HERE), 'finmind_token.txt'))
+TOKEN_FILE = next((p for p in (os.path.join(HERE, 'finmind_token.txt'), os.path.join(os.path.dirname(HERE), 'finmind_token.txt'),
+                               os.path.join(os.path.dirname(os.path.dirname(HERE)), 'finmind_token.txt'))
                    if os.path.exists(p)), '')
 CLOUD = '--cloud' in sys.argv     # 雲端（GitHub）模式：不開瀏覽器、不跳視窗、輸出到 site/index.html
 now_tw = lambda: datetime.datetime.utcnow() + datetime.timedelta(hours=8)   # 一律用台灣時間
