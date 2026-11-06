@@ -291,6 +291,41 @@ def main():
     print('\n'.join(lines))
     if '--notify' in sys.argv:
         popup('Reco-週選擇權工具', '\n'.join(lines))
+    if CLOUD or '--mail' in sys.argv:
+        send_mail(mail_subject(o), '\n'.join(lines) + '\n\n網頁：https://zaisss1.github.io/reco/')
+
+
+def mail_subject(o):
+    """信件標題：結果＋合約名稱＋要買的腳。例：【進場】11/06 TX2W2（11/11到期）Call 42800 ×2口 @106"""
+    op = o.get('opt') or {}
+    s = f"【{o['verdict']}】{o['date'][5:]}"
+    if op.get('name'):
+        s += f" {op['name']}（{op['exp'][5:]}到期）"
+    legs = [f"{'Call' if cp == 'C' else 'Put'} {op[cp]['K']} ×{op[cp].get('q', 1)}口 @{op[cp]['px']:g}"
+            for cp in o.get('buy', [])] if o['verdict'] == '進場' else []
+    return s + (' ' + '＋'.join(legs) if legs else '')
+
+
+def send_mail(subject, body):
+    """用 Gmail 寄信。帳號密碼只從環境變數讀（GitHub Secrets）：GMAIL_USER、GMAIL_APP_PASSWORD；MAIL_TO 可選。"""
+    user, pw = os.environ.get('GMAIL_USER', ''), os.environ.get('GMAIL_APP_PASSWORD', '').replace(' ', '')
+    if not (user and pw):
+        print('（沒有設定 GMAIL_USER / GMAIL_APP_PASSWORD，略過寄信）')
+        return
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.header import Header
+    to = [a.strip() for a in (os.environ.get('MAIL_TO') or user).split(',') if a.strip()]
+    msg = MIMEText(body, 'plain', 'utf-8')
+    msg['Subject'] = Header(subject, 'utf-8')
+    msg['From'], msg['To'] = user, ', '.join(to)
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as s:
+            s.login(user, pw)
+            s.sendmail(user, to, msg.as_string())
+        print('已寄信：' + subject)
+    except Exception as e:
+        print(f'寄信失敗：{e}')
 
 
 def ma_text(ma):

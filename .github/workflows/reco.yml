@@ -26,6 +26,9 @@ jobs:
         run: python check.py --cloud
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
           PYTHONIOENCODING: utf-8
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
