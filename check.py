@@ -292,7 +292,51 @@ def main():
     if '--notify' in sys.argv:
         popup('Reco-週選擇權工具', '\n'.join(lines))
     if CLOUD or '--mail' in sys.argv:
-        send_mail(mail_subject(o), '\n'.join(lines) + '\n\n網頁：https://zaisss1.github.io/reco/')
+        send_mail(mail_subject(o), mail_body(o))
+
+
+def mail_body(o):
+    """信件內文：先列進場條件，空一行，再列要買的合約、履約價、價格、口數。"""
+    ok = lambda b: '✅' if b else '❌'
+    ma = o['ma']
+    ma_ok = ma['status'] == 'OK'
+    ma_mark = ok(ma_ok) if ma['status'] in ('OK', 'NG') else '⏳'
+    L = [f"【{o['verdict']}】{o['why']}", f"{o['date']}（週{o['wd']}）", '',
+         '■ 進場條件',
+         f"{ok(o['wd_ok'])} ① 星期：週{o['wd']}（週四不做）",
+         f"{ok(o['chg_ok'])} ② 20日漲跌：{o['chg']:+.2f}%（不能在 −1% ~ +3%）",
+         f"　　　{o['pc_d'][5:]} 收 {o['pc']:,.0f} ／ {o['ref_d'][5:]} 收 {o['ref']:,.0f}",
+         f"{ma_mark} ③ 120MA：上午39根要全在MA下方",
+         f"　　　{ma_text(ma)}",
+         f"🔎 ④ 短線篩選：10日 {o['r10']:+.2f}%、3日 {o['r3']:+.2f}%",
+         '　　　（10日漲>3% 不買Call、3日跌>2% 不買Put）', '']
+    op = o.get('opt') or {}
+    L.append('■ 買什麼' if o['verdict'] == '進場' else '■ 合約（今天不進場，僅供參考）')
+    if op.get('error'):
+        L.append(op['error'])
+    elif op:
+        L.append(f"合約：{op['name']}（臺指選擇權 W 週選・{op['exp']} 週三到期）")
+        for cp, nm in (('C', 'Call'), ('P', 'Put')):
+            v = op.get(cp)
+            L.append('')
+            if not v:
+                L.append(f"▸ {nm}：抓不到報價")
+            elif v.get('skip'):
+                L.append(f"▸ {nm}：不買（{v['skip']}）")
+                L.append(f"　　參考：履約價 {v['K']:,}・價格 {v['px']:g} 點")
+            elif not v['inrange']:
+                L.append(f"▸ {nm}：不買（最接近100點的價格 {v['px']:g}，超出 85~110）")
+                L.append(f"　　參考：履約價 {v['K']:,}")
+            else:
+                q = v.get('q', 1)
+                act = '買' if o['verdict'] == '進場' else '（若進場）買'
+                L += [f"▸ {nm}：{act} {q} 口",
+                      f"　　履約價：{v['K']:,}",
+                      f"　　價格：{v['px']:g} 點（買價 {v['bid'] or '-'}／賣價 {v['ask'] or '-'}）",
+                      f"　　金額：約 {v['px'] * 50 * q:,.0f} 元（{v['px']:g} 點 × 50 × {q} 口）",
+                      f"　　出場：5倍 {v['five']}・10倍 {v['ten']:,} 點"]
+    L += ['', '網頁：https://zaisss1.github.io/reco/']
+    return '\n'.join(L)
 
 
 def mail_subject(o):
