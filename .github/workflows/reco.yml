@@ -1,7 +1,7 @@
 name: Reco 每日檢查
 on:
   schedule:
-    - cron: '2 4 * * 1-5'      # 台灣時間 週一~五 12:02（GitHub 可能延遲幾分鐘）
+    - cron: '7 4 * * 1-5'      # 台灣時間 週一~五 12:07（避開整點尖峰；GitHub 仍可能延遲）
   workflow_dispatch:           # 也可以在 Actions 頁面手動按 Run
 permissions:
   contents: read
