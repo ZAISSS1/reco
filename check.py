@@ -509,12 +509,72 @@ footer{{padding-top:22px;font-size:12px;color:var(--mute);line-height:1.8}}
 出場｜開盤跳空 ≥10 倍→開盤價・當晚夜盤或隔天日盤開盤 ≥5 倍→開盤價・盤中碰 10 倍→10 倍價・其餘放到結算<br>
 報價來自期交所行情資訊網（可能延遲），下單以券商報價為準。歷史回測不代表未來，非投資建議。</footer>
 </div></body></html>"""
+    stamp = f"{o['date']} {now_tw():%H:%M}"
+    page = page.replace('</header>', '</header>' + NOTIFY_JS.replace('__STAMP__', stamp), 1)
     p = os.path.join(HERE, '今日進場檢查.html')
     if CLOUD:
-        os.makedirs(os.path.join(HERE, 'site'), exist_ok=True); p = os.path.join(HERE, 'site', 'index.html')
+        sd = os.path.join(HERE, 'site'); os.makedirs(sd, exist_ok=True); p = os.path.join(sd, 'index.html')
+        json.dump(dict(stamp=stamp, title=mail_subject(o), body=o['why']),
+                  open(os.path.join(sd, 'status.json'), 'w', encoding='utf-8'), ensure_ascii=False)
+        open(os.path.join(sd, 'sw.js'), 'w', encoding='utf-8').write(SW_JS)
     open(p, 'w', encoding='utf-8').write(page)
     if '--no-open' not in sys.argv and not CLOUD:
         webbrowser.open('file:///' + p.replace('\\', '/'))
+
+
+NOTIFY_JS = """<div id="nt" class="note" style="display:none;margin-top:18px;color:var(--ink)">
+<b>網頁通知</b>：開著這個網頁時，今天結果一更新就跳通知。<button id="ntb" style="margin-left:10px;padding:5px 14px;border-radius:999px;border:1px solid var(--line);background:var(--acc);color:#fff;font-weight:600;cursor:pointer">開啟通知</button>
+<span id="nts" style="margin-left:8px;color:var(--mute)"></span></div>
+<script>
+(function(){
+  var STAMP = "__STAMP__";
+  if ((location.protocol !== 'https:' && location.hostname !== 'localhost') || !('Notification' in window)) return;
+  var box = document.getElementById('nt'), btn = document.getElementById('ntb'), st = document.getElementById('nts');
+  box.style.display = 'block';
+  var reg = null;
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then(function(r){ reg = r; }).catch(function(){});
+  function show(){
+    var p = Notification.permission;
+    btn.style.display = p === 'granted' ? 'none' : 'inline-block';
+    st.textContent = p === 'granted' ? '✓ 已開啟，請讓這個分頁保持開著' : p === 'denied' ? '瀏覽器已封鎖通知，請到網址列左邊的設定改成允許' : '';
+  }
+  btn.onclick = function(){ Notification.requestPermission().then(show); };
+  show();
+  function notify(t, b){
+    var opt = {body: b, tag: 'reco', renotify: true, requireInteraction: true};
+    try { if (reg && reg.showNotification) return reg.showNotification(t, opt); new Notification(t, opt); } catch (e) {}
+  }
+  function tw(){ var d = new Date(Date.now() + (new Date().getTimezoneOffset() + 480) * 60000); return d; }
+  function poll(){
+    fetch('status.json?t=' + Date.now(), {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(j){
+      if (j.stamp && j.stamp !== STAMP) {
+        var seen = ''; try { seen = localStorage.getItem('reco_seen') || ''; } catch (e) {}
+        if (seen !== j.stamp && Notification.permission === 'granted') {
+          notify(j.title, j.body);
+          try { localStorage.setItem('reco_seen', j.stamp); } catch (e) {}
+        }
+        var rl = ''; try { rl = sessionStorage.getItem('reco_rl') || ''; } catch (e) {}
+        if (rl !== j.stamp) {                       // 每個新結果只重新整理一次，避免 CDN 快取造成無限重整
+          try { sessionStorage.setItem('reco_rl', j.stamp); } catch (e) {}
+          setTimeout(function(){ location.href = location.pathname + '?v=' + Date.now(); }, 1500);
+        }
+      }
+    }).catch(function(){}).finally(function(){
+      var d = tw(), m = d.getHours() * 60 + d.getMinutes(), wk = d.getDay() >= 1 && d.getDay() <= 5;
+      setTimeout(poll, (wk && m >= 715 && m <= 810) ? 30000 : 300000);   // 11:55~13:30 每 30 秒，其他時間每 5 分
+    });
+  }
+  setTimeout(poll, 5000);
+})();
+</script>"""
+
+SW_JS = """self.addEventListener('install', e => self.skipWaiting());
+self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({type: 'window'}).then(cs => cs.length ? cs[0].focus() : self.clients.openWindow('./')));
+});
+"""
 
 
 def tick(b):
