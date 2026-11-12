@@ -343,6 +343,9 @@ def mail_subject(o):
     """信件標題：結果＋合約名稱＋要買的腳。例：【進場】11/06 TX2W2（11/11到期）Call 42800 ×2口 @106"""
     op = o.get('opt') or {}
     s = f"【{o['verdict']}】{o['date'][5:]}"
+    t = now_tw()
+    if CLOUD and t.hour * 60 + t.minute >= 13 * 60:      # GitHub 排程延遲時，標題註明實際送達時間
+        s = f"（延遲 {t:%H:%M} 才送達）" + s
     if op.get('name'):
         s += f" {op['name']}（{op['exp'][5:]}到期）"
     legs = [f"{'Call' if cp == 'C' else 'Put'} {op[cp]['K']} ×{op[cp].get('q', 1)}口 @{op[cp]['px']:g}"

@@ -5,6 +5,7 @@ on:
   workflow_dispatch:           # 也可以在 Actions 頁面手動按 Run
 permissions:
   contents: read
+  actions: read
   pages: write
   id-token: write
 concurrency:
@@ -18,11 +19,25 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      - name: 今天已經跑過就跳過（GitHub 排程常延遲，避免重複寄信）
+        id: dup
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          today=$(TZ=Asia/Taipei date +%F)
+          n=$(gh run list -R "$GITHUB_REPOSITORY" -w reco.yml -s success -L 30 --json createdAt \
+              -q "[.[] | select((.createdAt | fromdate + 28800 | strftime(\"%Y-%m-%d\")) == \"$today\")] | length")
+          echo "今天($today)已成功跑過 $n 次"
+          if [ "$n" -gt 0 ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
+        if: steps.dup.outputs.skip != '1'
       - uses: actions/setup-python@v5
+        if: steps.dup.outputs.skip != '1'
         with:
           python-version: '3.12'
       - name: 執行檢查
+        if: steps.dup.outputs.skip != '1'
         run: python check.py --cloud
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
@@ -31,8 +46,11 @@ jobs:
           MAIL_TO: ${{ secrets.MAIL_TO }}
           PYTHONIOENCODING: utf-8
       - uses: actions/configure-pages@v5
+        if: steps.dup.outputs.skip != '1'
       - uses: actions/upload-pages-artifact@v3
+        if: steps.dup.outputs.skip != '1'
         with:
           path: site
       - id: deploy
+        if: steps.dup.outputs.skip != '1'
         uses: actions/deploy-pages@v4
