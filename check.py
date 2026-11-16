@@ -8,6 +8,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOKEN_FILE = next((p for p in (os.path.join(HERE, 'finmind_token.txt'), os.path.join(os.path.dirname(HERE), 'finmind_token.txt'),
                                os.path.join(os.path.dirname(os.path.dirname(HERE)), 'finmind_token.txt'))
                    if os.path.exists(p)), '')
+MANUAL = '--manual' in sys.argv   # 網頁「立即更新」按鈕觸發：不等 12:00 資料、不寄信
 CLOUD = '--cloud' in sys.argv     # 雲端（GitHub）模式：不開瀏覽器、不跳視窗、輸出到 site/index.html
 now_tw = lambda: datetime.datetime.utcnow() + datetime.timedelta(hours=8)   # 一律用台灣時間
 today_tw = lambda: now_tw().date()
@@ -197,7 +198,7 @@ def main():
         past = []
         for d in prev[-3:]:
             past += [(d, k, *v) for k, v in sorted(finmind_bars(d.replace('/', '-'), tok).items())]
-        retry = ('--notify' in sys.argv or CLOUD) and o['wd_ok'] and o['chg_ok']
+        retry = ('--notify' in sys.argv or CLOUD) and o['wd_ok'] and o['chg_ok'] and not MANUAL
         for attempt in range(10 if retry else 1):
             tb = {}
             if D == today_tw():
@@ -291,7 +292,7 @@ def main():
     print('\n'.join(lines))
     if '--notify' in sys.argv:
         popup('Reco-週選擇權工具', '\n'.join(lines))
-    if CLOUD or '--mail' in sys.argv:
+    if (CLOUD and not MANUAL) or '--mail' in sys.argv:
         send_mail(mail_subject(o), mail_body(o))
 
 
@@ -522,49 +523,98 @@ footer{{padding-top:22px;font-size:12px;color:var(--mute);line-height:1.8}}
         webbrowser.open('file:///' + p.replace('\\', '/'))
 
 
-NOTIFY_JS = """<div id="nt" class="note" style="display:none;margin-top:18px;color:var(--ink)">
-<b>網頁通知</b>：開著這個網頁時，今天結果一更新就跳通知。<button id="ntb" style="margin-left:10px;padding:5px 14px;border-radius:999px;border:1px solid var(--line);background:var(--acc);color:#fff;font-weight:600;cursor:pointer">開啟通知</button>
+NOTIFY_JS = """<div id="nt" class="note" style="display:none;margin-top:18px;color:var(--ink);line-height:2">
+<button id="upd" style="padding:6px 16px;border-radius:999px;border:0;background:var(--ink);color:var(--bg);font-weight:700;cursor:pointer">⟳ 立即更新</button>
+<span id="upds" style="margin-left:8px;color:var(--mute)"></span>
+<div id="ntw" style="display:none"><b>網頁通知</b>：開著這個網頁時，今天結果一更新就跳通知。<button id="ntb" style="margin-left:10px;padding:5px 14px;border-radius:999px;border:1px solid var(--line);background:var(--acc);color:#fff;font-weight:600;cursor:pointer">開啟通知</button>
 <span id="nts" style="margin-left:8px;color:var(--mute)"></span></div>
+<div id="tkw" style="display:none;margin-top:6px;font-size:12px;color:var(--mute);line-height:1.7">
+第一次使用要設定 GitHub 金鑰（只存在這台裝置的瀏覽器裡）：<br>
+① 到 <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub 建立 Fine-grained token</a>，Repository access 選「Only select repositories → reco」<br>
+② Permissions → Repository → <b>Actions：Read and write</b>，其他都不用開，按 Generate，複製金鑰<br>
+③ 貼在下面按儲存：<br>
+<input id="tki" type="password" placeholder="github_pat_…" style="width:260px;max-width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)">
+<button id="tks" style="padding:5px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer">儲存並更新</button></div></div>
 <script>
 (function(){
-  var STAMP = "__STAMP__";
-  if ((location.protocol !== 'https:' && location.hostname !== 'localhost') || !('Notification' in window)) return;
-  var box = document.getElementById('nt'), btn = document.getElementById('ntb'), st = document.getElementById('nts');
-  box.style.display = 'block';
-  var reg = null;
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then(function(r){ reg = r; }).catch(function(){});
-  function show(){
-    var p = Notification.permission;
-    btn.style.display = p === 'granted' ? 'none' : 'inline-block';
-    st.textContent = p === 'granted' ? '✓ 已開啟，請讓這個分頁保持開著' : p === 'denied' ? '瀏覽器已封鎖通知，請到網址列左邊的設定改成允許' : '';
+  var STAMP = "__STAMP__", REPO = "ZAISSS1/reco";
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
+  var $ = function(id){ return document.getElementById(id); };
+  $('nt').style.display = 'block';
+  var ls = {get: function(k){ try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
+            set: function(k, v){ try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (e) {} }};
+  var fastUntil = 0, reg = null, hasN = 'Notification' in window;
+
+  // ── 網頁通知 ──
+  if (hasN) {
+    $('ntw').style.display = 'block';
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then(function(r){ reg = r; }).catch(function(){});
+    var show = function(){
+      var p = Notification.permission;
+      $('ntb').style.display = p === 'granted' ? 'none' : 'inline-block';
+      $('nts').textContent = p === 'granted' ? '✓ 已開啟，請讓這個分頁保持開著' : p === 'denied' ? '瀏覽器已封鎖通知，請到網址列左邊的設定改成允許' : '';
+    };
+    $('ntb').onclick = function(){ Notification.requestPermission().then(show); };
+    show();
   }
-  btn.onclick = function(){ Notification.requestPermission().then(show); };
-  show();
   function notify(t, b){
+    if (!hasN || Notification.permission !== 'granted') return;
     var opt = {body: b, tag: 'reco', renotify: true, requireInteraction: true};
     try { if (reg && reg.showNotification) return reg.showNotification(t, opt); new Notification(t, opt); } catch (e) {}
   }
-  function tw(){ var d = new Date(Date.now() + (new Date().getTimezoneOffset() + 480) * 60000); return d; }
+
+  // ── 立即更新：叫 GitHub 雲端馬上重算一次（手動更新不寄 Gmail） ──
+  function dispatch(){
+    var tok = ls.get('reco_gh');
+    if (!tok) { $('tkw').style.display = 'block'; $('upds').textContent = '請先設定金鑰'; return; }
+    $('upd').disabled = true; $('upds').textContent = '送出中…';
+    fetch('https://api.github.com/repos/' + REPO + '/actions/workflows/reco.yml/dispatches', {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + tok, 'Accept': 'application/vnd.github+json'},
+      body: JSON.stringify({ref: 'main', inputs: {manual: 'true'}})
+    }).then(function(r){
+      if (r.status === 204) {
+        $('upds').textContent = '雲端重算中，約 1～3 分鐘，完成後網頁會自動更新…';
+        fastUntil = Date.now() + 8 * 60000;
+        try { sessionStorage.setItem('reco_manual', '1'); } catch (e) {}
+        setTimeout(function(){ $('upd').disabled = false; }, 120000);
+        setTimeout(poll, 20000);
+      } else {
+        $('upd').disabled = false;
+        if (r.status === 401 || r.status === 403 || r.status === 404) {
+          ls.set('reco_gh', ''); $('tkw').style.display = 'block';
+          $('upds').textContent = '金鑰無效或權限不足（' + r.status + '），請重新設定';
+        } else $('upds').textContent = '送出失敗（' + r.status + '），請稍後再試';
+      }
+    }).catch(function(){ $('upd').disabled = false; $('upds').textContent = '連線失敗，請稍後再試'; });
+  }
+  $('upd').onclick = dispatch;
+  $('tks').onclick = function(){
+    var v = $('tki').value.trim(); if (!v) return;
+    ls.set('reco_gh', v); $('tki').value = ''; $('tkw').style.display = 'none'; dispatch();
+  };
+
+  // ── 定時檢查有沒有新結果 ──
+  function tw(){ return new Date(Date.now() + (new Date().getTimezoneOffset() + 480) * 60000); }
   function poll(){
     fetch('status.json?t=' + Date.now(), {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(j){
       if (j.stamp && j.stamp !== STAMP) {
-        var seen = ''; try { seen = localStorage.getItem('reco_seen') || ''; } catch (e) {}
-        if (seen !== j.stamp && Notification.permission === 'granted') {
-          notify(j.title, j.body);
-          try { localStorage.setItem('reco_seen', j.stamp); } catch (e) {}
-        }
+        var manual = ''; try { manual = sessionStorage.getItem('reco_manual') || ''; } catch (e) {}
+        if (ls.get('reco_seen') !== j.stamp && !manual) notify(j.title, j.body);   // 自己按的更新就不跳通知
+        ls.set('reco_seen', j.stamp);
         var rl = ''; try { rl = sessionStorage.getItem('reco_rl') || ''; } catch (e) {}
         if (rl !== j.stamp) {                       // 每個新結果只重新整理一次，避免 CDN 快取造成無限重整
-          try { sessionStorage.setItem('reco_rl', j.stamp); } catch (e) {}
+          try { sessionStorage.setItem('reco_rl', j.stamp); sessionStorage.removeItem('reco_manual'); } catch (e) {}
           setTimeout(function(){ location.href = location.pathname + '?v=' + Date.now(); }, 1500);
         }
       }
     }).catch(function(){}).finally(function(){
       var d = tw(), m = d.getHours() * 60 + d.getMinutes(), wk = d.getDay() >= 1 && d.getDay() <= 5;
-      setTimeout(poll, (wk && m >= 715 && m <= 810) ? 30000 : 300000);   // 11:55~13:30 每 30 秒，其他時間每 5 分
+      var wait = Date.now() < fastUntil ? 10000 : (wk && m >= 715 && m <= 810) ? 30000 : 300000;   // 按更新後每 10 秒；11:55~13:30 每 30 秒；其他每 5 分
+      clearTimeout(window.__recoT); window.__recoT = setTimeout(poll, wait);
     });
   }
-  setTimeout(poll, 5000);
+  window.__recoT = setTimeout(poll, 5000);
 })();
 </script>"""
 
