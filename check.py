@@ -238,6 +238,8 @@ def main():
         verdict, why = '不進場', f'20日漲跌 {chg:+.2f}%，落在 −1% ~ +3% 之間（慢漲或盤整）'
     elif ma['status'] == 'NG':
         verdict, why = '不進場', '上午的 K 棒有碰到或站上 120MA'
+    elif ma['status'] == 'OK' and ma.get('n', 39) < 39 and D == today_tw():
+        verdict, why = '待確認', f"目前上午 {ma['n']}/39 根都在 120MA 下方，要 12:00 收完 39 根才算數（暫定）"
     elif ma['status'] == 'OK':
         verdict, why = '進場', '三個條件全部符合'
     else:
