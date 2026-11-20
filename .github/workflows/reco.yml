@@ -10,7 +10,7 @@ on:
         type: boolean
         default: false
 permissions:
-  contents: read
+  contents: write
   actions: read
   pages: write
   id-token: write
@@ -51,6 +51,17 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           PYTHONIOENCODING: utf-8
+      - name: 存歷史紀錄回 repo
+        if: steps.dup.outputs.skip != '1'
+        run: |
+          cp history.json site/history.json 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add history.json
+          if ! git diff --cached --quiet; then
+            git commit -m "歷史紀錄 $(TZ=Asia/Taipei date '+%F %H:%M')"
+            git pull --rebase -q && git push -q
+          fi
       - uses: actions/configure-pages@v5
         if: steps.dup.outputs.skip != '1'
       - uses: actions/upload-pages-artifact@v3

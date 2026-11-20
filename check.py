@@ -268,6 +268,8 @@ def main():
             o['verdict'], o['why'] = verdict, why
         except Exception as e:
             o['opt'] = dict(error=f'抓即時報價失敗：{e}')
+    if CLOUD:
+        save_history(o)
     write_html(o, [(d, closes[d][0]) for d in prev[-25:]])
     lines = [f"{Ds}（週{o['wd']}）→ {verdict}：{why}",
              f"20日漲跌：{pc_d} 收 {pc:,.0f} vs {ref_d} 收 {ref:,.0f} = {chg:+.2f}%",
@@ -384,6 +386,75 @@ def ma_text(ma):
     return ma['status']
 
 
+HIST_FILE = os.path.join(HERE, 'history.json')
+
+
+def load_history():
+    try:
+        return json.load(open(HIST_FILE, encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+def hist_record(o, src='live', t=None):
+    """把當天結果整理成一筆歷史紀錄。"""
+    op = o.get('opt') or {}
+    buy = o.get('buy') or []
+    legs = []
+    for cp in 'CP':
+        v = op.get(cp)
+        if v:
+            legs.append(dict(cp=cp, K=v['K'], px=v['px'], q=v.get('q', 1) if cp in buy else 0,
+                             skip=v.get('skip') or ('' if v['inrange'] else '超出85~110')))
+    ma = o.get('ma') or {}
+    r = lambda k: round(o[k], 2) if isinstance(o.get(k), (int, float)) else None
+    return dict(date=o['date'], wd=o['wd'], verdict=o['verdict'], why=o['why'], chg=r('chg'), r10=r('r10'), r3=r('r3'),
+                ma=ma.get('status') if ma.get('status') in ('OK', 'NG') else None, ma_n=ma.get('n'), ma_below=ma.get('below'),
+                name=op.get('name'), exp=op.get('exp'), legs=legs, t=t or f"{now_tw():%H:%M}", src=src)
+
+
+def save_history(o):
+    """每天 12:00 之後第一次的正式結果存一筆（之後的「立即更新」不覆蓋，保留接近 12:00 的進場價）。"""
+    H = load_history()
+    D = datetime.datetime.strptime(o['date'], '%Y/%m/%d').date()
+    t = now_tw()
+    if D == today_tw() and t.hour < 12:
+        return                                   # 12:00 前是暫定結果，不存
+    old = H.get(o['date'])
+    if old and old.get('verdict') != '待確認' and not str(old.get('why', '')).startswith('目前上午'):
+        return
+    H[o['date']] = hist_record(o)
+    json.dump(dict(sorted(H.items())), open(HIST_FILE, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+
+
+def history_html():
+    H = load_history()
+    if not H:
+        return ''
+    col = {'進場': '#0a7d4f', '不進場': '#b4232c', '待確認': '#a16207'}
+    rows = []
+    for d, h in sorted(H.items(), reverse=True):
+        legs = [x for x in h.get('legs', []) if x.get('q')]
+        if h['verdict'] == '進場' and legs:
+            what = '<br>'.join(f"{'Call' if x['cp'] == 'C' else 'Put'} {x['K']} ×{x['q']}口 @{x['px']:g}" for x in legs)
+            what = f"<b>{html.escape(h.get('name') or '')}</b>（{(h.get('exp') or '')[5:]}到期）<br>{what}"
+        else:
+            what = html.escape(h.get('why', ''))
+        f = lambda v: '—' if v is None else f'{v:+.1f}%'
+        sub = f"20日 {f(h.get('chg'))}・10日 {f(h.get('r10'))}・3日 {f(h.get('r3'))}"
+        if h.get('ma'):
+            sub += f"・MA {h.get('ma_below')}/{h.get('ma_n')}"
+        tag = '補登' if h.get('src') == 'backfill' else h.get('t', '')
+        rows.append(f"<tr><td class='hd'>{d[5:]}<span>週{h['wd']}</span></td>"
+                    f"<td><span class='hv' style='color:{col.get(h['verdict'], '#888')}'>{h['verdict']}</span></td>"
+                    f"<td class='hw'>{what}<div class='hs'>{sub}</div></td><td class='ht'>{tag}</td></tr>")
+    n_in = sum(1 for h in H.values() if h['verdict'] == '進場')
+    return (f"<section><div class='sh'><div><div class='k'>HISTORY</div><div class='h'>歷史紀錄"
+            f"<span class='exp'>{len(H)} 個交易日・進場 {n_in} 次</span></div></div></div>"
+            f"<table class='hist'>{''.join(rows)}</table>"
+            f"<div class='hs' style='margin-top:10px'>每天記 12:00 之後第一次的正式結果；「補登」是用期交所成交資料回推 12:00 前最後成交價。</div></section>")
+
+
 def write_html(o, hist):
     V = o['verdict']
     accent = {'進場': '#0a7d4f', '不進場': '#b4232c', '待確認': '#a16207'}[V]
@@ -493,6 +564,10 @@ section{{padding:28px 0;border-bottom:1px solid var(--line)}}
 details{{margin-top:16px;font-size:13px}} summary{{cursor:pointer;color:var(--mute)}}
 table{{width:100%;border-collapse:collapse;margin-top:8px;font-variant-numeric:tabular-nums}}
 td{{padding:7px 0;border-bottom:1px solid var(--line)}} td+td{{text-align:right}}
+.hist td{{vertical-align:top;padding:11px 6px 11px 0;text-align:left}} .hist td+td{{text-align:left}}
+.hist .hd{{white-space:nowrap;font-weight:600;font-variant-numeric:tabular-nums;width:58px}} .hist .hd span{{display:block;font-size:11px;color:var(--mute);font-weight:400}}
+.hist .hv{{font-weight:700;white-space:nowrap}} .hist .hw{{font-size:13px;line-height:1.6}} .hist .ht{{font-size:11px;color:var(--mute);white-space:nowrap;text-align:right!important}}
+.hs{{font-size:11px;color:var(--mute);margin-top:3px}}
 .note{{font-size:13px;padding:14px 16px;border-radius:12px;background:var(--card);border:1px solid var(--line);color:#a16207}}
 footer{{padding-top:22px;font-size:12px;color:var(--mute);line-height:1.8}}
 @media (max-width:560px){{.legs{{grid-template-columns:1fr}} .verdict .v{{font-size:46px}}
@@ -504,6 +579,7 @@ footer{{padding-top:22px;font-size:12px;color:var(--mute);line-height:1.8}}
 <div class="why">{html.escape(o['why'])}</div></div>
 <section>{legs}</section>
 <section><div class="sh"><div><div class="k">CHECKLIST</div><div class="h">進場條件</div></div></div>{conds}</section>
+{history_html()}
 <section><div class="sh"><div><div class="k">TAIEX FUTURES</div><div class="h">近 25 日收盤</div></div>
 <div class="exp">{lo:,.0f} – {hi:,.0f}</div></div>{spark}
 <details><summary>查看每日收盤</summary><table>{rows}</table></details></section>
