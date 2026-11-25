@@ -1,5 +1,5 @@
 # 每日進場檢查工具：只做W・週四不進場（100點版）＋20日漲跌篩選＋120MA條件
-import urllib.request, urllib.parse, csv, io, json, datetime, os, sys, webbrowser, html, re, time
+import urllib.request, urllib.error, urllib.parse, csv, io, json, datetime, os, sys, webbrowser, html, re, time
 from collections import defaultdict
 
 if sys.stdout is None:  # 用 pythonw（排程）執行時沒有主控台
@@ -16,6 +16,22 @@ today_tw = lambda: now_tw().date()
 LOW, HIGH = -1.0, 3.0            # 20日漲跌在這個區間 → 不進場
 RULE = {0: 7, 1: 6, 2: 5, 4: 3}  # 週一剩7、週二剩6、週三剩5、週五剩3；週四不進場
 WD = '一二三四五六日'
+
+
+def _open(req, timeout=60):
+    """連線暫時失敗（例如期交所 520、逾時）就重試，最多 4 次；401/403/404 等不重試。"""
+    for i in range(4):
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            if i == 3 or (e.code < 500 and e.code != 429):
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if i == 3:
+                raise
+        time.sleep(5 * (i + 1))
+
+
 SINGLE_LOTS = 2                  # 只剩一腳能買時，把另一腳預算加進來買幾口（改成 1 就是 A+ 原版）
 
 
@@ -33,7 +49,7 @@ def _taifex_chunk(start, end):
     data = urllib.parse.urlencode(dict(down_type=1, commodity_id='TX', commodity_id2='',
                                        queryStartDate=start.strftime('%Y/%m/%d'),
                                        queryEndDate=end.strftime('%Y/%m/%d'))).encode()
-    raw = urllib.request.urlopen(urllib.request.Request('https://www.taifex.com.tw/cht/3/futDataDown', data=data),
+    raw = _open(urllib.request.Request('https://www.taifex.com.tw/cht/3/futDataDown', data=data),
                                  timeout=120).read()
     by = defaultdict(list)
     for x in csv.reader(io.StringIO(raw.decode('big5', 'replace'))):
@@ -60,7 +76,7 @@ def finmind_bars(day, tok):
 def _finmind_bars(day, tok):
     url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanFuturesTick&data_id=TX&start_date={day}"
     req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + tok})
-    js = json.loads(urllib.request.urlopen(req, timeout=180).read())
+    js = json.loads(_open(req, timeout=180).read())
     rows = [x for x in js.get('data', []) if x['date'][:10] == day and '08:45' <= x['date'][11:16] <= '13:45'
             and x['contract_date'].isdigit()]
     if not rows:
@@ -90,7 +106,7 @@ def mis_bars_today():
     H = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
     def post(ep, body):
         req = urllib.request.Request('https://mis.taifex.com.tw/futures/api/' + ep, data=json.dumps(body).encode(), headers=H)
-        return json.loads(urllib.request.urlopen(req, timeout=60).read())['RtData']
+        return json.loads(_open(req, timeout=60).read())['RtData']
     L = post('getQuoteList', {"MarketType": "0", "SymbolType": "F", "KindID": "1", "CID": "TXF", "ExpireMonth": "",
                               "RowSize": "全部", "PageNo": "", "SortColumn": "", "AscDesc": "A"})['QuoteList']
     sid = next(x['SymbolID'] for x in L if re.match(r'^TXF[A-L]\d-F$', x['SymbolID']))  # 第一個＝近月
@@ -116,7 +132,7 @@ def taifex_quotes():
             "RowSize": "全部", "PageNo": "", "SortColumn": "", "AscDesc": "A"}
     req = urllib.request.Request('https://mis.taifex.com.tw/futures/api/getQuoteList', data=json.dumps(body).encode(),
                                  headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'})
-    L = json.loads(urllib.request.urlopen(req, timeout=60).read())['RtData']['QuoteList']
+    L = json.loads(_open(req, timeout=60).read())['RtData']['QuoteList']
     out = []
     for x in L:
         name = x.get('DispEName', '')
