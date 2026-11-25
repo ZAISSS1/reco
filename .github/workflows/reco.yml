@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 25
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy1.outputs.page_url || steps.deploy2.outputs.page_url || steps.deploy.outputs.page_url }}
     steps:
       - name: 今天已經跑過就跳過（GitHub 排程常延遲，避免重複寄信）
         id: dup
@@ -72,6 +72,23 @@ jobs:
         if: steps.dup.outputs.skip != '1'
         with:
           path: site
-      - id: deploy
+      - name: 等檔案可查到
         if: steps.dup.outputs.skip != '1'
+        run: sleep 10
+      - id: deploy1
+        if: steps.dup.outputs.skip != '1'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: 部署重試前等待 1
+        if: steps.dup.outputs.skip != '1' && steps.deploy1.outcome == 'failure'
+        run: sleep 30
+      - id: deploy2
+        if: steps.dup.outputs.skip != '1' && steps.deploy1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: 部署重試前等待 2
+        if: steps.dup.outputs.skip != '1' && steps.deploy2.outcome == 'failure'
+        run: sleep 60
+      - id: deploy
+        if: steps.dup.outputs.skip != '1' && steps.deploy2.outcome == 'failure'
         uses: actions/deploy-pages@v4
