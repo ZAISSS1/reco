@@ -8,7 +8,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOKEN_FILE = next((p for p in (os.path.join(HERE, 'finmind_token.txt'), os.path.join(os.path.dirname(HERE), 'finmind_token.txt'),
                                os.path.join(os.path.dirname(os.path.dirname(HERE)), 'finmind_token.txt'))
                    if os.path.exists(p)), '')
-MANUAL = '--manual' in sys.argv   # 網頁「立即更新」按鈕觸發：不等 12:00 資料、不寄信
+EARLY = '--early' in sys.argv     # 12:00 前已確定不進場的提前通知：不等資料、寄信
+MANUAL = EARLY or '--manual' in sys.argv   # 網頁「立即更新」按鈕觸發：不等 12:00 資料、不寄信
 CLOUD = '--cloud' in sys.argv     # 雲端（GitHub）模式：不開瀏覽器、不跳視窗、輸出到 site/index.html
 now_tw = lambda: datetime.datetime.utcnow() + datetime.timedelta(hours=8)   # 一律用台灣時間
 today_tw = lambda: now_tw().date()
@@ -44,7 +45,19 @@ def _taifex_chunk(start, end):
     return {d: max(L)[1:] for d, L in by.items()}  # 成交量最大的月份（近月）收盤
 
 
+_FM = {}   # 已收盤日期的快取（背景監看用，避免重複下載）
+
+
 def finmind_bars(day, tok):
+    if day not in _FM:
+        b = _finmind_bars(day, tok)
+        if not b or day >= today_tw().isoformat():
+            return b
+        _FM[day] = b
+    return _FM[day]
+
+
+def _finmind_bars(day, tok):
     url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanFuturesTick&data_id=TX&start_date={day}"
     req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + tok})
     js = json.loads(urllib.request.urlopen(req, timeout=180).read())
@@ -82,6 +95,8 @@ def mis_bars_today():
                               "RowSize": "全部", "PageNo": "", "SortColumn": "", "AscDesc": "A"})['QuoteList']
     sid = next(x['SymbolID'] for x in L if re.match(r'^TXF[A-L]\d-F$', x['SymbolID']))  # 第一個＝近月
     r = post('getChartData1M', {"SymbolID": sid})
+    if r.get('Quote', {}).get('CDate') != f'{today_tw():%Y%m%d}':
+        return {}                                      # 休市日會回傳前一天的資料
     bars = {}
     for t, o_, h, l, c, v in r.get('Ticks', []):
         m = int(t[:2]) * 60 + int(t[2:4]) - 1          # 時間是這根1分K的結束時間
@@ -204,23 +219,26 @@ def main():
             if D == today_tw():
                 try: tb = mis_bars_today()
                 except Exception: tb = {}
-            if len([k for k in tb if k < '12:00']) < 39:
+            t_ = now_tw()
+            if D == today_tw() and t_.hour < 12:           # 12:00 前只看已收完的 5 分K（多等 1 分鐘）
+                tb = {k: v for k, v in tb.items() if int(k[:2]) * 60 + int(k[3:]) + 6 <= t_.hour * 60 + t_.minute}
+            elif len([k for k in tb if k < '12:00']) < 39:
                 tb = finmind_bars(Ds.replace('/', '-'), tok) or tb
             seq = past + [(Ds, k, *v) for k, v in sorted(tb.items())]
             morning = [i for i, s in enumerate(seq) if s[0] == Ds and s[1] < '12:00']
             if len(morning) >= 39 or D != today_tw():
                 break
             time.sleep(60)
-        if len(morning) < 35:
+        below = touch = above = 0
+        for i in morning:
+            m = sum(s[5] for s in seq[i - 119:i + 1]) / 120
+            l, h = seq[i][4], seq[i][3]
+            if l <= m <= h: touch += 1
+            elif l > m: above += 1
+            else: below += 1
+        if len(morning) < 35 and not touch and not above and D != today_tw() or not morning:
             ma = dict(status=f'今天上午的5分K還不夠（目前 {len(morning)} 根，需要 39 根）。請 12:00 之後再執行，或自行看盤確認')
         else:
-            below = touch = above = 0
-            for i in morning:
-                m = sum(s[5] for s in seq[i - 119:i + 1]) / 120
-                l, h = seq[i][4], seq[i][3]
-                if l <= m <= h: touch += 1
-                elif l > m: above += 1
-                else: below += 1
             ma = dict(status='OK' if touch == 0 and above == 0 else 'NG', below=below, touch=touch, above=above,
                       n=len(morning), last_ma=round(m))
     except Exception as e:
@@ -245,6 +263,7 @@ def main():
     else:
         verdict, why = '待確認', '星期和 20 日漲跌都符合，只剩 120MA 條件要確認'
     o['verdict'], o['why'] = verdict, why
+    o['final_no'] = verdict == '不進場'      # 星期／月選／20日／120MA 不合格：之後不會再變
     if True:  # 不進場也列出履約價供參考
         try:
             o['opt'] = pick_options(D)
@@ -258,7 +277,12 @@ def main():
             for cp in buy:
                 op_[cp]['q'] = SINGLE_LOTS if len(buy) == 1 else 1
             o['buy'] = buy
-            if verdict in ('進場', '待確認') and not buy:
+            both = all(op_.get(cp) and op_[cp].get('skip') for cp in 'CP')
+            if both and verdict in ('進場', '待確認'):
+                o['final_no'] = True
+            if verdict == '待確認' and not buy and not both:
+                why += '；目前報價買不到，12:00 再看'
+            elif verdict in ('進場', '待確認') and not buy:
                 verdict, why = '不進場', '條件符合，但 Call 和 Put 都被篩掉或買不到'
             elif verdict == '進場' and len(buy) == 1:
                 nm = 'Call' if buy[0] == 'C' else 'Put'
@@ -296,7 +320,7 @@ def main():
     print('\n'.join(lines))
     if '--notify' in sys.argv:
         popup('Reco-週選擇權工具', '\n'.join(lines))
-    if (CLOUD and not MANUAL) or '--mail' in sys.argv:
+    if (CLOUD and not MANUAL) or (EARLY and o.get('final_no')) or '--mail' in sys.argv:
         send_mail(mail_subject(o), mail_body(o))
 
 
@@ -349,7 +373,9 @@ def mail_subject(o):
     op = o.get('opt') or {}
     s = f"【{o['verdict']}】{o['date'][5:]}"
     t = now_tw()
-    if CLOUD and t.hour * 60 + t.minute >= 13 * 60:      # GitHub 排程延遲時，標題註明實際送達時間
+    if EARLY:
+        s = f"（{t:%H:%M} 提前確定）" + s
+    elif CLOUD and t.hour * 60 + t.minute >= 13 * 60:      # GitHub 排程延遲時，標題註明實際送達時間
         s = f"（延遲 {t:%H:%M} 才送達）" + s
     if op.get('name'):
         s += f" {op['name']}（{op['exp'][5:]}到期）"
